@@ -196,3 +196,307 @@ weixin-albums/
 ## License
 
 MIT
+
+
+# Windows 下下载微信公众号合集文章操作指南
+
+## 目标
+
+下载微信公众号合集文章，并将每篇文章保存为 Markdown 文件。
+
+适用场景：
+
+* 微信公众号合集链接形如：
+
+```text
+https://mp.weixin.qq.com/mp/appmsgalbum?__biz=...&album_id=...
+```
+
+* 使用 `opencli-weixin-album` 可以成功获取合集文章列表；
+* 但直接批量下载时可能在 Windows 上报错，或误判所有文章已经下载完成。
+
+---
+
+## 一、准备环境
+
+### 1. 安装 OpenCLI 和插件
+
+```bat
+npm install -g @jackwener/opencli
+opencli plugin install github:SlowGrowth1314/opencli-weixin-album
+```
+
+### 2. 检查 Chrome Browser Bridge 是否正常
+
+运行：
+
+```bat
+opencli doctor
+```
+
+正常结果应看到类似：
+
+```text
+[OK] Daemon: running
+[OK] Extension: connected
+[OK] Connectivity: connected
+Everything looks good!
+```
+
+只要 `Extension: connected`，说明 Chrome 扩展连接正常。
+
+---
+
+## 二、确认单篇文章可以下载
+
+先找一篇合集里的文章链接，测试单篇下载：
+
+```bat
+opencli weixin download --window foreground --url "单篇文章URL" --output ".\weixin-test" -v
+```
+
+如果成功，会看到类似：
+
+```text
+Status: success
+Saved: weixin-test\...\文章标题.md
+```
+
+这一步很关键。
+
+如果单篇成功，说明：
+
+* Chrome 扩展正常；
+* 微信文章能访问；
+* 登录态/访问环境没问题；
+* 后续失败主要是合集插件批量调用的问题。
+
+---
+
+## 三、用合集插件生成索引文件
+
+运行合集下载命令：
+
+```bat
+opencli weixin download-album --url "https://mp.weixin.qq.com/mp/appmsgalbum?__biz=MzYzMTg3OTAyMQ==&action=getalbum&album_id=4514218896866000901&scene=126&sessionid=1782734528982#wechat_redirect"
+```
+
+如果正常，会看到类似：
+
+```text
+📦 获取合集: 4514218896866000901
+📖 合集名称: 医生手里的数据如何变成论文
+📥 20 篇
+📥 40 篇
+📥 41 篇
+✅ 共收集 41 篇文章链接
+📄 索引文件: C:\Users\a2785\weixin-albums\医生手里的数据如何变成论文\医生手里的数据如何变成论文.md
+```
+
+此时重点是生成了索引文件：
+
+```text
+C:\Users\a2785\weixin-albums\医生手里的数据如何变成论文\医生手里的数据如何变成论文.md
+```
+
+如果插件后面批量下载失败，可以停止，不影响后续操作。
+
+---
+
+## 四、不要直接用索引文件续跑插件
+
+不要运行：
+
+```bat
+opencli weixin download-album --url "C:\Users\a2785\weixin-albums\医生手里的数据如何变成论文\医生手里的数据如何变成论文.md"
+```
+
+原因：
+
+文章标题里可能含有 `|`，而插件在增量模式解析 Markdown 表格时可能会错位，把文章误判成已经下载完成。
+
+典型表现是：
+
+```text
+已下载: 41 篇，待下载: 0 篇，共 41 篇
+全部文章已下载完成，无需继续
+```
+
+但实际上本地并没有 41 篇正文文件。
+
+---
+
+## 五、推荐做法：用 PowerShell 一行命令批量下载正文
+
+在 CMD 里直接运行下面这一整行，不需要手动换行：
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$Index=$env:USERPROFILE+'\weixin-albums\医生手里的数据如何变成论文\医生手里的数据如何变成论文.md'; $Out=$env:USERPROFILE+'\weixin-redownload'; $env:OPENCLI_WINDOW='foreground'; $env:OPENCLI_BROWSER_COMMAND_TIMEOUT='120'; New-Item -ItemType Directory -Force -Path $Out | Out-Null; $text=Get-Content -LiteralPath $Index -Raw -Encoding UTF8; $urls=[regex]::Matches($text,'https?://mp\.weixin\.qq\.com/s\?[^ \t\r\n|)]+') | ForEach-Object { $_.Value -replace '&amp;','&' } | Select-Object -Unique; Write-Host ('共找到 '+$urls.Count+' 个文章链接'); $i=0; foreach($url in $urls){ $i++; Write-Host ('['+$i+'/'+$urls.Count+'] 下载：'+$url); & opencli weixin download --window foreground --url $url --output $Out -v; if($LASTEXITCODE -ne 0){ Add-Content -LiteralPath (Join-Path $Out 'failed.txt') -Value $url; Write-Host '失败，已记录到 failed.txt' }; Start-Sleep -Seconds 3 }; Get-ChildItem $Out -Recurse -Filter *.md | Measure-Object"
+```
+
+这条命令会：
+
+1. 读取合集索引文件；
+2. 从索引里提取所有 `mp.weixin.qq.com/s?...` 文章链接；
+3. 逐篇调用：
+
+```bat
+opencli weixin download --window foreground --url "文章URL" --output "输出目录" -v
+```
+
+4. 每篇之间暂停 3 秒；
+5. 失败的文章会记录到：
+
+```text
+C:\Users\a2785\weixin-redownload\failed.txt
+```
+
+6. 最后统计已下载的 Markdown 文件数量。
+
+---
+
+## 六、打开下载目录
+
+下载完成后运行：
+
+```bat
+explorer "%USERPROFILE%\weixin-redownload"
+```
+
+正常情况下，每篇文章会保存成一个独立文件夹，里面包含：
+
+```text
+文章标题.md
+images\
+```
+
+如果合集有 41 篇文章，最终应接近 41 个正文 Markdown 文件。
+
+---
+
+## 七、检查下载数量
+
+运行：
+
+```bat
+powershell -NoProfile -Command "Get-ChildItem \"$env:USERPROFILE\weixin-redownload\" -Recurse -Filter *.md | Measure-Object"
+```
+
+如果输出数量接近合集文章数，说明下载完成。
+
+例如：
+
+```text
+Count    : 41
+```
+
+---
+
+## 八、常见问题
+
+### 1. 报错：`invalid album URL or index path`
+
+原因是把单篇文章链接传给了 `download-album`。
+
+错误示例：
+
+```bat
+opencli weixin download-album --url "https://mp.weixin.qq.com/s?..."
+```
+
+正确做法：
+
+* 合集下载用：
+
+```bat
+opencli weixin download-album --url "https://mp.weixin.qq.com/mp/appmsgalbum?...album_id=..."
+```
+
+* 单篇文章下载用：
+
+```bat
+opencli weixin download --url "https://mp.weixin.qq.com/s?..."
+```
+
+---
+
+### 2. 报错：`spawn EINVAL`
+
+这是 Windows 下插件内部调用子进程的问题。
+
+解决办法：
+
+不要依赖插件批量下载正文，改用上面的 PowerShell 一行命令，逐篇调用已经验证成功的单篇下载命令。
+
+---
+
+### 3. 报错：`'mid' 不是内部或外部命令`
+
+这是因为微信文章 URL 里有很多 `&mid=...&idx=...&sn=...` 参数。
+
+在 CMD 的 shell 环境里，`&` 会被当成命令分隔符。
+
+解决办法：
+
+不要手动拼接不带引号的 URL；用 PowerShell 脚本里的：
+
+```powershell
+& opencli weixin download --window foreground --url $url --output $Out -v
+```
+
+这样 PowerShell 会把 `$url` 当成一个完整参数传给 OpenCLI。
+
+---
+
+### 4. 显示 downloaded，但本地没文件
+
+这是插件增量模式解析索引时可能误判。
+
+原因通常是文章标题里含有 `|`，导致 Markdown 表格列错位。
+
+解决办法：
+
+不要用索引文件继续跑 `download-album`，而是用 PowerShell 从索引里提取真实 URL，再逐篇下载。
+
+---
+
+## 九、最终推荐流程
+
+完整流程如下：
+
+```bat
+opencli doctor
+```
+
+确认正常后：
+
+```bat
+opencli weixin download-album --url "合集URL"
+```
+
+生成索引文件后，不管插件后续批量下载是否失败，直接用 PowerShell 一行命令批量下载正文。
+
+最后检查：
+
+```bat
+powershell -NoProfile -Command "Get-ChildItem \"$env:USERPROFILE\weixin-redownload\" -Recurse -Filter *.md | Measure-Object"
+```
+
+并打开目录：
+
+```bat
+explorer "%USERPROFILE%\weixin-redownload"
+```
+
+---
+
+## 十、本次成功路径总结
+
+本次最终跑通的关键点是：
+
+1. `opencli doctor` 显示 daemon、Chrome extension、connectivity 全部正常；
+2. 单篇文章 `opencli weixin download` 可以成功；
+3. `opencli-weixin-album` 能抓取合集 41 篇文章链接；
+4. 插件在 Windows 下批量下载阶段不稳定，因此绕开它；
+5. 使用 PowerShell 从合集索引中提取文章 URL；
+6. 逐篇调用 `opencli weixin download`，最终成功下载正文。
